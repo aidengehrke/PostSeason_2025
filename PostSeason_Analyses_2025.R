@@ -580,3 +580,135 @@ ggplot(loss_contact_start2end_25, aes(x = first_fix, y = serial_no)) +
   guides(colour = guide_legend(title = NULL))
 #ggsave(here::here('output/figures/2024_Deployments_Nov072024.png'), height = 10, width = 20, units = 'in')
 
+#---- RSF Survey Summary ----------
+
+arc.check_product()
+# Read in from ArcGIS Online - Found under layer overview in the "URL" box along the right side of the screen
+rsf_surveys_2025 <- arc.data2sf(arc.select(arc.open("https://services2.arcgis.com/njxlOVQKvDzk10uN/arcgis/rest/services/Fall2023_Weekly_Sampling_WFL1/FeatureServer/0")))
+
+{
+rsf_25 <- rsf_surveys_2025 %>% 
+  select(-sample_id, -OBJECTID) %>% 
+  filter(local_identifier != "230264") %>% 
+  mutate(
+   local_identifier = gsub("LA22", "LA-22", local_identifier),
+   local_identifier = gsub("x2", "", local_identifier),
+   local_identifier = gsub(" ", "", local_identifier),
+   local_identifier = gsub("Nopi", "NOPI", local_identifier),
+   local_identifier = replace(local_identifier, local_identifier == "24-8", "NOPI24-8"),
+   local_identifier = replace(local_identifier, local_identifier == "NOPI23-1", "NOPI24-1"),
+   local_identifier = replace(local_identifier, local_identifier == "NOPI23-18", "NOPI24-18"),
+   local_identifier = replace(local_identifier, local_identifier == "NOPI23-20", "NOPI24-20"),
+   local_identifier = replace(local_identifier, local_identifier == "NOPI23-7", "NOPI24-7"),
+   rice_variety = gsub(" ", "", rice_variety),
+   rice_variety = gsub("PLV", "PVL", rice_variety),
+   rice_variety = replace(rice_variety, rice_variety == "JAZZMAN", "Jazzman"),
+   rice_variety = replace(rice_variety, rice_variety == "Chenier", "Cheniere"),
+   rice_type = ifelse(grepl("PV", rice_variety), "PR", rice_type),
+   rice_type = ifelse(grepl("RT7", rice_variety), "H", rice_type),
+   rice_type = ifelse(grepl("CL", rice_variety), "CL", rice_type),
+   rice_variety = gsub("Avant ", "Avant", rice_variety),
+   rice_variety = gsub("RTxp753", "RTXP753", rice_variety)) %>%
+  select(local_identifier, survey_period, Isopleth_Level_33_66_99, survey_type,
+   survey_type_other, field_type, field_type_other, water_depth, rice_type,
+   rice_variety, stubble_height, stubble_density, visible_turnouts, visible_turnouts_other,
+   harevst_type, harvest_type_other, post_harvest_management, phm_other,Rice_Type_24, 
+   Rice_Variety_24, Fallow_Conditions, Other, Estimated_Vegetation_Density, evidence_of_crawfishing,
+   Crawfish_Traps_Deployed, Ever_Crawfished, Crawfish_Start, Crawfishing_End_Date_If_Applica, 
+   Trap_Check_Frequency, Were_Fields_Intentionally_Distu, Propane_Cannon, Strobe_Light,
+   Flags, Other_Disturbance, evidence_hunting_pressure, 
+   Please_Select_Your_Name, Date_Time, FIN, Weekly_Survey_Notes, geom) %>% 
+  #nest(., .by = c(survey_period, local_identifier)) %>% 
+  arrange(local_identifier, survey_period)
+
+colnames(rsf_25) <- c(
+  "local_identifier", "survey_period", "isopleth", "survey_type",
+  "survey_type_other", "field_type", "other_ft", "est_water_depth", "rice_type_23",
+  "rice_variety_23", "stubble_height", "stubble_density", "visible_turnouts", "other_vt",
+  "harvest_type", "other_ht", "post_harvest_management", "other_phm", "rice_type_24",
+  "rice_variety_24", "fallow_conditions", "other_fal", "estimated_veg_density", "evidence_of_crawfishing",
+  "crawfish_traps_deployed", "ever_crawfished", "crawfish_start", "crawfish_end", 
+  "trap_frequency", "intentional_disturb", "propane_cannon", "strobe_light",
+  "flag", "other_dist", "evidence_hunting", 
+  "technician_name", "survey_timestamp", "FIN", "survey_notes", "polygon_geometry") 
+st_geometry(rsf_25) <- "polygon_geometry"
+
+rsf_25$survey_type <- recode(rsf_25$survey_type, "used_points_all" = "focal", "available_flooded" = "available")
+rsf_25$field_type <- recode(rsf_25$field_type, "fallow_rotation_moist_soil" = "fallow", "rice_agriculture" = "rice", "other_field_type" = "other")
+rsf_25$fallow_conditions <- recode(rsf_25$fallow_conditions, "Plowed Bare Soil; Unvegetated" = "bare_soil", "Moist Soil Vegetated" = "veg_moist_soil", "Shredded Moist Soil" = "shred_moist_soil")
+}
+
+rsf_2025 <-  rsf_25 %>% 
+  group_by(local_identifier, survey_period, isopleth) %>%
+  #filter(sum(survey_type == 0) >= (2*sum(survey_type == 1))) %>% 
+  arrange(local_identifier, survey_period, isopleth, survey_type) %>% 
+  mutate(group_identifier = paste(local_identifier, survey_period, isopleth, sep = "_")) %>%
+  ungroup() %>% 
+  mutate(field_type = ifelse(field_type == "other", tolower(other_ft), field_type),
+     harvest_type = ifelse(harvest_type == "other_harvest_type", tolower(other_ht), harvest_type),
+     harvest_type = ifelse(post_harvest_management == "unharvested", "unharvested", harvest_type),
+     post_harvest_management = ifelse(
+       grepl("green rice|green rice |Green rice", other_ht) | 
+       grepl("green rice|green rice |Green rice", survey_notes) | 
+       grepl("green rice|green rice |Green rice", other_phm), "green_rice", post_harvest_management),
+     harvest_type = ifelse(harvest_type == "not harvested ", "unharvested", harvest_type),
+     post_harvest_management = ifelse(post_harvest_management == "other", tolower(other_phm), post_harvest_management),
+     estimated_veg_density = tolower(estimated_veg_density),
+     field_management = ifelse(field_type == "fallow", paste(field_type, tolower(fallow_conditions), sep = "_"),
+                        ifelse(field_type == "rice", paste(field_type, tolower(post_harvest_management), sep = "_"),field_type)),
+     veg_density = ifelse(field_type == "fallow", paste(estimated_veg_density, "ms_veg", sep = "_"),
+                   ifelse(field_type == "rice", paste(stubble_density, "rice_stub", sep = "_"),field_type)),
+     double_crop_yn = ifelse(grepl("two crop|2 crop", survey_notes, ignore.case = TRUE), "yes", NA),
+     harvest_type_2nd = NA,
+     harvest_type_2nd = ifelse(
+       grepl("yes", double_crop_yn, ignore.case = TRUE) & 
+       grepl("stripper", survey_notes, ignore.case = TRUE) & 
+       grepl("both", survey_notes, ignore.case = TRUE), "stripper_head", 
+          ifelse(grepl("conventional", survey_notes, ignore.case = TRUE) & 
+          grepl("both", survey_notes, ignore.case = TRUE), "conventional", 
+              ifelse(grepl("second w stripper in water", survey_notes, ignore.case = TRUE), "stripper_head", harvest_type_2nd))),
+     double_crop_yn = ifelse(!(is.na(harvest_type_2nd)), "yes", double_crop_yn),
+     disturbance = paste(
+       ifelse(flag == "Yes", "flag", NA),
+       ifelse(strobe_light == "Yes", "strobe", NA),
+       ifelse(propane_cannon == "Yes", "cannon", NA),
+       ifelse(evidence_hunting == "yes", "hunt", NA),
+       ifelse(grepl("scarecrow", survey_notes, ignore.case = TRUE), "scarecrow", NA),
+       ifelse(grepl("Cannon", survey_notes, ignore.case = TRUE), "cannon", NA),
+       ifelse(
+         flag == "No" & 
+         strobe_light == "No" & 
+         propane_cannon == "No" & 
+         evidence_hunting == "no" & 
+         grepl("scarecrow", survey_notes, ignore.case = TRUE) == FALSE &
+         grepl("Cannon", survey_notes, ignore.case = TRUE) == FALSE , "no_dist_obs", NA), sep = "_") %>% gsub("NA_", "", .) %>% gsub("_NA", "", .) %>% gsub("NA", NA, .),
+     harvest_type_2nd = ifelse(grepl("second crop not cut|Second crop left for CF|2nd not harvested|second left for CF", survey_notes), "unharvested", harvest_type_2nd),
+     est_water_depth = ifelse(grepl("no_visible_surface_water", est_water_depth), "0", est_water_depth),
+     crawfish_traps_deployed = tolower(crawfish_traps_deployed),
+     craw_tos = ifelse(ever_crawfished == "Yes" & survey_timestamp > crawfish_start, "active",
+                ifelse(ever_crawfished == "Yes" & survey_timestamp < crawfish_start, "managed", 
+                ifelse(ever_crawfished == "No", "not_cf", NA))),
+     FIN = ifelse(FIN == "NA", NA, FIN),
+     area_sqrm = abs(st_area(polygon_geometry)),
+     area_sqrkm = set_units(area_sqrm, "km^2")) %>% 
+  relocate(group_identifier, .before = survey_type) %>% 
+  relocate(craw_tos, .after = ever_crawfished) %>% 
+  rename(use = survey_type) %>% 
+  relocate(field_management, .after = fallow_conditions) %>% 
+  relocate(veg_density, .after = estimated_veg_density) %>% 
+  relocate(c(double_crop_yn,harvest_type_2nd), .after = harvest_type) %>% 
+  relocate(disturbance, .after = trap_frequency) %>% 
+  relocate(area_sqrm, area_sqrkm, .after = survey_notes) %>% 
+  select(
+    -other_ft, -visible_turnouts, -other_vt, -other_phm, -other_ht, -rice_variety_24, 
+    -rice_type_24, -other_fal, -flag, -propane_cannon, -intentional_disturb, -strobe_light, 
+    -other_dist, -evidence_hunting) %>% 
+  mutate(
+    centroid_geometry = st_centroid(rsf_25$polygon_geometry),
+    shrink_geometry = st_buffer(polygon_geometry, -(as_units(5, "m"))),
+    centroid_buffer = st_buffer(centroid_geometry, (as_units(10, "m")))) %>% 
+  arrange(double_crop_yn) %>% 
+  st_zm(drop = TRUE, what = "ZM")
+
+
+
